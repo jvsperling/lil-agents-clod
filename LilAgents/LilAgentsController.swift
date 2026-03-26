@@ -15,6 +15,8 @@ class LilAgentsController {
         char1.decelStart = 8.0
         char1.walkStop = 8.5
         char1.walkAmountRange = 0.4...0.65
+        char1.processing1VideoName = "processing1"
+        char1.processing2VideoName = "processing2"
 
         let char2 = WalkerCharacter(walkVideoName: "walk-sad-clode", bounceVideoName: "bounce-sad-clode")
         char2.accelStart = 3.9

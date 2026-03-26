@@ -17,6 +17,20 @@ class WalkerCharacter {
     var bounceLooper: AVPlayerLooper!
     var activePlayer: AVQueuePlayer!
 
+    // Processing animation (optional per-character)
+    var processing1VideoName: String?
+    var processing2VideoName: String?
+    var processing1Player: AVPlayer?
+    var processing1PlayerLayer: AVPlayerLayer?
+    var processing2Player: AVQueuePlayer?
+    var processing2Looper: AVPlayerLooper?
+    var processing2PlayerLayer: AVPlayerLayer?
+    private var processing1EndObserver: NSObjectProtocol?
+    enum ProcessingPhase { case none, intro, loop }
+    var isProcessing = false
+    var processingPhase: ProcessingPhase = .none
+    private var wasClaudeBusy = false
+
     let videoWidth: CGFloat = 1440
     let videoHeight: CGFloat = 1440
     let displayHeight: CGFloat = 200
@@ -100,9 +114,44 @@ class WalkerCharacter {
         walkPlayerLayer.frame = layerFrame
         walkPlayerLayer.isHidden = true
 
-        // Keep both loopers running; toggle layer visibility to switch clips (no AVPlayerLayer.player swap).
+        // Optionally set up processing video players (one-shot intro + looping)
+        if let p1Name = processing1VideoName, let p2Name = processing2VideoName,
+           let p1URL = Bundle.main.url(forResource: p1Name, withExtension: "mov"),
+           let p2URL = Bundle.main.url(forResource: p2Name, withExtension: "mov") {
+
+            let p2q = AVQueuePlayer()
+            processing2Looper = AVPlayerLooper(player: p2q, templateItem: AVPlayerItem(asset: AVAsset(url: p2URL)))
+            processing2Player = p2q
+
+            let p2Layer = AVPlayerLayer(player: p2q)
+            p2Layer.videoGravity = .resizeAspect
+            p2Layer.backgroundColor = NSColor.clear.cgColor
+            p2Layer.frame = layerFrame
+            p2Layer.isHidden = true
+            processing2PlayerLayer = p2Layer
+
+            let p1 = AVPlayer(url: p1URL)
+            p1.actionAtItemEnd = .pause
+            processing1Player = p1
+
+            let p1Layer = AVPlayerLayer(player: p1)
+            p1Layer.videoGravity = .resizeAspect
+            p1Layer.backgroundColor = NSColor.clear.cgColor
+            p1Layer.frame = layerFrame
+            p1Layer.isHidden = true
+            processing1PlayerLayer = p1Layer
+        }
+
+        // Keep all loopers running; toggle layer visibility to switch clips.
         bouncePlayer.play()
         walkPlayer.play()
+        processing2Player?.play()
+        // Decode first frame of processing1 then pause at start so it's ready instantly
+        processing1Player?.play()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.processing1Player?.pause()
+            self?.processing1Player?.seek(to: .zero)
+        }
 
         let screen = NSScreen.main!
         let dockTopY = screen.visibleFrame.origin.y
@@ -127,8 +176,10 @@ class WalkerCharacter {
         hostView.character = self
         hostView.wantsLayer = true
         hostView.layer?.backgroundColor = NSColor.clear.cgColor
-        // Bounce added first; walk on top so hiding walk reveals bounce underneath.
+        // Layer stack bottom-to-top: bounce, processing2, processing1, walk.
         hostView.layer?.addSublayer(bouncePlayerLayer)
+        if let p2Layer = processing2PlayerLayer { hostView.layer?.addSublayer(p2Layer) }
+        if let p1Layer = processing1PlayerLayer { hostView.layer?.addSublayer(p1Layer) }
         hostView.layer?.addSublayer(walkPlayerLayer)
 
         window.contentView = hostView
@@ -139,6 +190,8 @@ class WalkerCharacter {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         bouncePlayerLayer.isHidden = true
+        processing1PlayerLayer?.isHidden = true
+        processing2PlayerLayer?.isHidden = true
         walkPlayerLayer.isHidden = false
         CATransaction.commit()
         activePlayer = walkPlayer
@@ -148,21 +201,45 @@ class WalkerCharacter {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         walkPlayerLayer.isHidden = true
+        processing1PlayerLayer?.isHidden = true
+        processing2PlayerLayer?.isHidden = true
         bouncePlayerLayer.isHidden = false
         CATransaction.commit()
         activePlayer = bouncePlayer
     }
 
-    /// Pauses both video loopers (e.g. menu hide). Both stay paused until `resumeAllVideoPlayback()`.
+    private func switchToProcessing1Video() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        bouncePlayerLayer.isHidden = true
+        walkPlayerLayer.isHidden = true
+        processing2PlayerLayer?.isHidden = true
+        processing1PlayerLayer?.isHidden = false
+        CATransaction.commit()
+    }
+
+    private func switchToProcessing2Video() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        bouncePlayerLayer.isHidden = true
+        walkPlayerLayer.isHidden = true
+        processing1PlayerLayer?.isHidden = true
+        processing2PlayerLayer?.isHidden = false
+        CATransaction.commit()
+    }
+
     func pauseAllVideoPlayback() {
         bouncePlayer.pause()
         walkPlayer.pause()
+        processing2Player?.pause()
+        if processingPhase != .intro { processing1Player?.pause() }
     }
 
-    /// Resumes both loopers so both layers always have decoded frames ready.
     func resumeAllVideoPlayback() {
         bouncePlayer.play()
         walkPlayer.play()
+        processing2Player?.play()
+        if processingPhase == .intro { processing1Player?.play() }
     }
 
     // MARK: - Click Handling & Popover
@@ -244,7 +321,7 @@ class WalkerCharacter {
         isIdleForPopover = true
         isWalking = false
         isPaused = true
-        switchToBounceVideo()
+        if !isProcessing { switchToBounceVideo() }
 
         // Always clear any bubble (thinking or completion) when popover opens
         showingCompletion = false
@@ -400,6 +477,7 @@ class WalkerCharacter {
         }
 
         session.onTurnComplete = { [weak self] in
+            self?.stopProcessing()
             self?.terminalView?.endStreaming()
             self?.playCompletionSound()
             self?.showCompletionBubble()
@@ -664,6 +742,54 @@ class WalkerCharacter {
         }
     }
 
+    // MARK: - Processing Animation
+
+    func startProcessing() {
+        guard processing1Player != nil else { return }
+        isProcessing = true
+        processingPhase = .intro
+        isWalking = false
+        isPaused = true
+
+        processing1Player?.seek(to: .zero)
+        switchToProcessing1Video()
+        processing1Player?.play()
+
+        processing1EndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: processing1Player?.currentItem,
+            queue: .main
+        ) { [weak self] _ in
+            self?.onProcessing1Ended()
+        }
+    }
+
+    private func onProcessing1Ended() {
+        if let obs = processing1EndObserver {
+            NotificationCenter.default.removeObserver(obs)
+            processing1EndObserver = nil
+        }
+        guard isProcessing else { return }
+        processingPhase = .loop
+        switchToProcessing2Video()
+        // Reset processing1 to frame 0 so it's ready for next use
+        processing1Player?.seek(to: .zero)
+        processing1Player?.pause()
+    }
+
+    func stopProcessing() {
+        guard isProcessing else { return }
+        isProcessing = false
+        processingPhase = .none
+        if let obs = processing1EndObserver {
+            NotificationCenter.default.removeObserver(obs)
+            processing1EndObserver = nil
+        }
+        switchToBounceVideo()
+        processing1Player?.pause()
+        processing1Player?.seek(to: .zero)
+    }
+
     // MARK: - Walking
 
     func startWalk() {
@@ -728,6 +854,10 @@ class WalkerCharacter {
         bouncePlayerLayer.frame = frame
         walkPlayerLayer.transform = transform
         walkPlayerLayer.frame = frame
+        processing1PlayerLayer?.transform = transform
+        processing1PlayerLayer?.frame = frame
+        processing2PlayerLayer?.transform = transform
+        processing2PlayerLayer?.frame = frame
         CATransaction.commit()
     }
 
@@ -764,6 +894,14 @@ class WalkerCharacter {
 
     func update(dockX: CGFloat, dockWidth: CGFloat, dockTopY: CGFloat) {
         currentTravelDistance = max(dockWidth - displayWidth, 0)
+
+        // Edge-detect Claude busy transitions to trigger processing animation
+        let busy = isClaudeBusy
+        if busy && !wasClaudeBusy {
+            startProcessing()
+        }
+        wasClaudeBusy = busy
+
         if isIdleForPopover {
             let travelDistance = currentTravelDistance
             let x = dockX + travelDistance * positionProgress + currentFlipCompensation
@@ -771,6 +909,17 @@ class WalkerCharacter {
             let y = dockTopY - bottomPadding + yOffset
             window.setFrameOrigin(NSPoint(x: x, y: y))
             updatePopoverPosition()
+            updateThinkingBubble()
+            return
+        }
+
+        // While processing, stay in place -- skip walk/pause FSM
+        if isProcessing {
+            let travelDistance = currentTravelDistance
+            let x = dockX + travelDistance * positionProgress + currentFlipCompensation
+            let bottomPadding = displayHeight * 0.15
+            let y = dockTopY - bottomPadding + yOffset
+            window.setFrameOrigin(NSPoint(x: x, y: y))
             updateThinkingBubble()
             return
         }
