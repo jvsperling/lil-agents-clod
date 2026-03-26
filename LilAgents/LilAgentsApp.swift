@@ -37,11 +37,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
 
-        let char1Item = NSMenuItem(title: "Bruce", action: #selector(toggleChar1), keyEquivalent: "1")
+        let char1Item = NSMenuItem(title: "Happy Clode", action: #selector(toggleChar1), keyEquivalent: "1")
         char1Item.state = .on
         menu.addItem(char1Item)
 
-        let char2Item = NSMenuItem(title: "Jazz", action: #selector(toggleChar2), keyEquivalent: "2")
+        let char2Item = NSMenuItem(title: "Sad Clode", action: #selector(toggleChar2), keyEquivalent: "2")
         char2Item.state = .on
         menu.addItem(char2Item)
 
@@ -146,10 +146,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let char = chars[0]
         if char.window.isVisible {
             char.window.orderOut(nil)
-            char.queuePlayer.pause()
+            char.pauseAllVideoPlayback()
             sender.state = .off
         } else {
             char.window.orderFrontRegardless()
+            char.resumeAllVideoPlayback()
             sender.state = .on
         }
     }
@@ -159,10 +160,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let char = chars[1]
         if char.window.isVisible {
             char.window.orderOut(nil)
-            char.queuePlayer.pause()
+            char.pauseAllVideoPlayback()
             sender.state = .off
         } else {
             char.window.orderFrontRegardless()
+            char.resumeAllVideoPlayback()
             sender.state = .on
         }
     }

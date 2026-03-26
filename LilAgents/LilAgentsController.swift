@@ -8,26 +8,28 @@ class LilAgentsController {
     private static let onboardingKey = "hasCompletedOnboarding"
 
     func start() {
-        let char1 = WalkerCharacter(videoName: "walk-bruce-01")
+        let char1 = WalkerCharacter(walkVideoName: "walk-happy-clode", bounceVideoName: "bounce-happy-clode")
+        // Walk timing tuned for 10s clips: horizontal easing aligned with typical walk-in-place / travel cycle
         char1.accelStart = 3.0
         char1.fullSpeedStart = 3.75
         char1.decelStart = 8.0
         char1.walkStop = 8.5
         char1.walkAmountRange = 0.4...0.65
 
-        let char2 = WalkerCharacter(videoName: "walk-jazz-01")
+        let char2 = WalkerCharacter(walkVideoName: "walk-sad-clode", bounceVideoName: "bounce-sad-clode")
         char2.accelStart = 3.9
         char2.fullSpeedStart = 4.5
         char2.decelStart = 8.0
         char2.walkStop = 8.75
-        char2.walkAmountRange = 0.35...0.6
-        char1.yOffset = -3
-        char2.yOffset = -7
-        char1.characterColor = NSColor(red: 0.4, green: 0.72, blue: 0.55, alpha: 1.0)
-        char2.characterColor = NSColor(red: 1.0, green: 0.4, blue: 0.0, alpha: 1.0)
+        // ~2/3 of previous range: shorter distance per walk cycle (slower across the dock)
+        char2.walkAmountRange = (0.35 * 2.0 / 3.0)...(0.6 * 2.0 / 3.0)
+        char1.yOffset = 0
+        char2.yOffset = 0
+        char1.characterColor = NSColor(red: 0.85, green: 0.45, blue: 0.25, alpha: 1.0)
+        char2.characterColor = NSColor(red: 0.78, green: 0.38, blue: 0.18, alpha: 1.0)
 
         char1.flipXOffset = 0
-        char2.flipXOffset = -9
+        char2.flipXOffset = 0
 
         char1.positionProgress = 0.3
         char2.positionProgress = 0.7
@@ -50,15 +52,15 @@ class LilAgentsController {
     }
 
     private func triggerOnboarding() {
-        guard let bruce = characters.first else { return }
-        bruce.isOnboarding = true
+        guard let firstChar = characters.first else { return }
+        firstChar.isOnboarding = true
         // Show "hi!" bubble after a short delay so the character is visible first
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            bruce.currentPhrase = "hi!"
-            bruce.showingCompletion = true
-            bruce.completionBubbleExpiry = CACurrentMediaTime() + 600 // stays until clicked
-            bruce.showBubble(text: "hi!", isCompletion: true)
-            bruce.playCompletionSound()
+            firstChar.currentPhrase = "hi!"
+            firstChar.showingCompletion = true
+            firstChar.completionBubbleExpiry = CACurrentMediaTime() + 600 // stays until clicked
+            firstChar.showBubble(text: "hi!", isCompletion: true)
+            firstChar.playCompletionSound()
         }
     }
 
@@ -168,8 +170,10 @@ class LilAgentsController {
         let dockTopY: CGFloat
 
         if screenHasDock(screen) {
-            // Dock is on this screen — constrain to dock area
-            (dockX, dockWidth) = getDockIconArea(screenWidth: screenWidth)
+            // Dock is on this screen — constrain to dock area (global X must include screen.frame.minX)
+            let (relDockX, dw) = getDockIconArea(screenWidth: screenWidth)
+            dockX = screen.frame.minX + relDockX
+            dockWidth = dw
             dockTopY = screen.visibleFrame.origin.y
         } else {
             // No dock on this screen — use full screen width with small margin

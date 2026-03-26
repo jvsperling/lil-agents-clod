@@ -2,14 +2,23 @@ import AVFoundation
 import AppKit
 
 class WalkerCharacter {
-    let videoName: String
+    let walkVideoName: String
+    let bounceVideoName: String
     var window: NSWindow!
-    var playerLayer: AVPlayerLayer!
-    var queuePlayer: AVQueuePlayer!
-    var looper: AVPlayerLooper!
+    var bouncePlayerLayer: AVPlayerLayer!
+    var walkPlayerLayer: AVPlayerLayer!
 
-    let videoWidth: CGFloat = 1080
-    let videoHeight: CGFloat = 1920
+    /// Layer that is currently visible (walk vs bounce).
+    var playerLayer: AVPlayerLayer { walkPlayerLayer.isHidden ? bouncePlayerLayer : walkPlayerLayer }
+
+    var walkPlayer: AVQueuePlayer!
+    var walkLooper: AVPlayerLooper!
+    var bouncePlayer: AVQueuePlayer!
+    var bounceLooper: AVPlayerLooper!
+    var activePlayer: AVQueuePlayer!
+
+    let videoWidth: CGFloat = 1440
+    let videoHeight: CGFloat = 1440
     let displayHeight: CGFloat = 200
     var displayWidth: CGFloat { displayHeight * (videoWidth / videoHeight) }
 
@@ -25,7 +34,6 @@ class WalkerCharacter {
     var characterColor: NSColor = .gray
 
     // Walk state
-    var playCount = 0
     var walkStartTime: CFTimeInterval = 0
     var positionProgress: CGFloat = 0.0
     var isWalking = false
@@ -55,26 +63,46 @@ class WalkerCharacter {
     var isClaudeBusy: Bool { claudeSession?.isBusy ?? false }
     var thinkingBubbleWindow: NSWindow?
 
-    init(videoName: String) {
-        self.videoName = videoName
+    init(walkVideoName: String, bounceVideoName: String) {
+        self.walkVideoName = walkVideoName
+        self.bounceVideoName = bounceVideoName
     }
 
     // MARK: - Setup
 
     func setup() {
-        guard let videoURL = Bundle.main.url(forResource: videoName, withExtension: "mov") else {
-            print("Video \(videoName) not found")
+        guard let walkURL = Bundle.main.url(forResource: walkVideoName, withExtension: "mov") else {
+            print("Walk video \(walkVideoName) not found")
+            return
+        }
+        guard let bounceURL = Bundle.main.url(forResource: bounceVideoName, withExtension: "mov") else {
+            print("Bounce video \(bounceVideoName) not found")
             return
         }
 
-        let asset = AVAsset(url: videoURL)
-        queuePlayer = AVQueuePlayer()
-        looper = AVPlayerLooper(player: queuePlayer, templateItem: AVPlayerItem(asset: asset))
+        walkPlayer = AVQueuePlayer()
+        walkLooper = AVPlayerLooper(player: walkPlayer, templateItem: AVPlayerItem(asset: AVAsset(url: walkURL)))
 
-        playerLayer = AVPlayerLayer(player: queuePlayer)
-        playerLayer.videoGravity = .resizeAspect
-        playerLayer.backgroundColor = NSColor.clear.cgColor
-        playerLayer.frame = CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight)
+        bouncePlayer = AVQueuePlayer()
+        bounceLooper = AVPlayerLooper(player: bouncePlayer, templateItem: AVPlayerItem(asset: AVAsset(url: bounceURL)))
+
+        activePlayer = bouncePlayer
+
+        let layerFrame = CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight)
+        bouncePlayerLayer = AVPlayerLayer(player: bouncePlayer)
+        bouncePlayerLayer.videoGravity = .resizeAspect
+        bouncePlayerLayer.backgroundColor = NSColor.clear.cgColor
+        bouncePlayerLayer.frame = layerFrame
+
+        walkPlayerLayer = AVPlayerLayer(player: walkPlayer)
+        walkPlayerLayer.videoGravity = .resizeAspect
+        walkPlayerLayer.backgroundColor = NSColor.clear.cgColor
+        walkPlayerLayer.frame = layerFrame
+        walkPlayerLayer.isHidden = true
+
+        // Keep both loopers running; toggle layer visibility to switch clips (no AVPlayerLayer.player swap).
+        bouncePlayer.play()
+        walkPlayer.play()
 
         let screen = NSScreen.main!
         let dockTopY = screen.visibleFrame.origin.y
@@ -99,10 +127,42 @@ class WalkerCharacter {
         hostView.character = self
         hostView.wantsLayer = true
         hostView.layer?.backgroundColor = NSColor.clear.cgColor
-        hostView.layer?.addSublayer(playerLayer)
+        // Bounce added first; walk on top so hiding walk reveals bounce underneath.
+        hostView.layer?.addSublayer(bouncePlayerLayer)
+        hostView.layer?.addSublayer(walkPlayerLayer)
 
         window.contentView = hostView
         window.orderFrontRegardless()
+    }
+
+    private func switchToWalkVideo() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        bouncePlayerLayer.isHidden = true
+        walkPlayerLayer.isHidden = false
+        CATransaction.commit()
+        activePlayer = walkPlayer
+    }
+
+    private func switchToBounceVideo() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        walkPlayerLayer.isHidden = true
+        bouncePlayerLayer.isHidden = false
+        CATransaction.commit()
+        activePlayer = bouncePlayer
+    }
+
+    /// Pauses both video loopers (e.g. menu hide). Both stay paused until `resumeAllVideoPlayback()`.
+    func pauseAllVideoPlayback() {
+        bouncePlayer.pause()
+        walkPlayer.pause()
+    }
+
+    /// Resumes both loopers so both layers always have decoded frames ready.
+    func resumeAllVideoPlayback() {
+        bouncePlayer.play()
+        walkPlayer.play()
     }
 
     // MARK: - Click Handling & Popover
@@ -126,8 +186,7 @@ class WalkerCharacter {
         isIdleForPopover = true
         isWalking = false
         isPaused = true
-        queuePlayer.pause()
-        queuePlayer.seek(to: .zero)
+        switchToBounceVideo()
 
         if popoverWindow == nil {
             createPopoverWindow()
@@ -137,9 +196,9 @@ class WalkerCharacter {
         terminalView?.inputField.isEditable = false
         terminalView?.inputField.placeholderString = ""
         let welcome = """
-        hey! we're bruce and jazz — your lil dock agents.
+        hey! we're your lil dock clodes.
 
-        click either of us to open a Claude AI chat. we'll walk around while you work and let you know when Claude's thinking.
+        click either of us to open a Claude AI chat. we'll hang around while you work and let you know when Claude's thinking.
 
         check the menu bar icon (top right) for themes, sounds, and more options.
 
@@ -171,7 +230,6 @@ class WalkerCharacter {
         isOnboarding = false
         isPaused = true
         pauseEndTime = CACurrentMediaTime() + Double.random(in: 1.0...3.0)
-        queuePlayer.seek(to: .zero)
         controller?.completeOnboarding()
     }
 
@@ -186,8 +244,7 @@ class WalkerCharacter {
         isIdleForPopover = true
         isWalking = false
         isPaused = true
-        queuePlayer.pause()
-        queuePlayer.seek(to: .zero)
+        switchToBounceVideo()
 
         // Always clear any bubble (thinking or completion) when popover opens
         showingCompletion = false
@@ -612,7 +669,6 @@ class WalkerCharacter {
     func startWalk() {
         isPaused = false
         isWalking = true
-        playCount = 0
         walkStartTime = CACurrentMediaTime()
 
         if positionProgress > 0.85 {
@@ -652,15 +708,13 @@ class WalkerCharacter {
         }
 
         updateFlip()
-        queuePlayer.seek(to: .zero)
-        queuePlayer.play()
+        switchToWalkVideo()
     }
 
     func enterPause() {
         isWalking = false
         isPaused = true
-        queuePlayer.pause()
-        queuePlayer.seek(to: .zero)
+        switchToBounceVideo()
         let delay = Double.random(in: 5.0...12.0)
         pauseEndTime = CACurrentMediaTime() + delay
     }
@@ -668,12 +722,12 @@ class WalkerCharacter {
     func updateFlip() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if goingRight {
-            playerLayer.transform = CATransform3DIdentity
-        } else {
-            playerLayer.transform = CATransform3DMakeScale(-1, 1, 1)
-        }
-        playerLayer.frame = CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight)
+        let transform = goingRight ? CATransform3DIdentity : CATransform3DMakeScale(-1, 1, 1)
+        let frame = CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight)
+        bouncePlayerLayer.transform = transform
+        bouncePlayerLayer.frame = frame
+        walkPlayerLayer.transform = transform
+        walkPlayerLayer.frame = frame
         CATransaction.commit()
     }
 
